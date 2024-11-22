@@ -13,7 +13,7 @@
 
 <script>
 import _ from 'lodash';
-import VueMarkdown from 'vue-markdown';
+import VueMarkdown from '@adapttive/vue-markdown';
 import Loader from '../Loader';
 import config from '../../config';
 
@@ -70,11 +70,10 @@ export default {
       // eslint-disable-next-line consistent-return
       const visibleAct = _.map(this.actVisibility, (ac, key) => (ac === true ? key : '')).filter(String);
       const nextIndex = visibleAct[visibleAct.indexOf(currentIndex) + 1];
-      if (this.$route.query.url) {
-        this.$router.push(`/activities/${nextIndex}?url=${this.$route.query.url}`);
-      } else {
-        this.$router.push(`/activities/${nextIndex}`);
-      }
+      this.$router.push({
+        'path': `/activities/${nextIndex}`,
+        'query': this.$route.query}
+      );
     },
   },
 };
@@ -106,7 +105,7 @@ export default {
     font-weight: bold;
   }
 
-  /* DOCKED LAYOUT (header annd footer at top and bottom of viewport,
+  /* DOCKED LAYOUT (header and footer at top and bottom of viewport,
   center elements each scroll) */
   .docked-layout {
     display: flex;

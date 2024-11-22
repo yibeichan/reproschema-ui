@@ -80,12 +80,11 @@
   import SurveyItem from '../SurveyItem/';
   import Loader from '../Loader/';
   import JSZip from "jszip";
-  import {saveAs} from "file-saver";
+  //import {saveAs} from "file-saver";
   import config from "../../config";
   import axios from "axios";
 
   Vue.component('survey-item', SurveyItem);
-  const safeEval = require('safe-eval');
 
   export default {
     name: 'Survey',
@@ -254,16 +253,10 @@
       },
       setResponse(val, index, mp_progress=100) {
         const itemUrl = this.context[index]['@id'];
+        //console.log(val, index, mp_progress, itemUrl);
         let exportVal = val;
         let usedList = [];
         let isAboutUrl = itemUrl;
-        if (val.constructor === Object && !val.hasOwnProperty('unitCode')) { // to find sub-activities; condition might need to be changed
-          const sectionItemKey = Object.keys(val)[0];
-          const sectionItemValue = Object.values(val)[0];
-          exportVal = sectionItemValue;
-          usedList.push(sectionItemKey);
-          isAboutUrl = sectionItemKey;
-        }
         usedList.push(`${itemUrl}`, `${this.srcUrl}`);
         const d2 = new Date();
         const t1 = d2.toISOString();
@@ -275,7 +268,7 @@
         const respActivityUuid = uuidv4();
         const responseUuid = uuidv4();
         const responseActivity = {
-          '@context': 'https://raw.githubusercontent.com/ReproNim/reproschema/1.0.0-rc2/contexts/generic',
+          '@context': 'https://raw.githubusercontent.com/ReproNim/reproschema/1.0.0/contexts/reproschema',
           '@type': 'reproschema:ResponseActivity',
           '@id': `uuid:${respActivityUuid}`,
           used: usedList,
@@ -283,14 +276,14 @@
           startedAtTime: this.t0,
           endedAtTime: t1,
           wasAssociatedWith: {
-            version: '0.0.1',
+            version: '1.0.0',
             url: uiUrl,
             '@id': 'https://github.com/ReproNim/reproschema-ui',
           },
           generated: `uuid:${responseUuid}`,
         };
         const respData = {
-          '@context': 'https://raw.githubusercontent.com/ReproNim/reproschema/1.0.0-rc2/contexts/generic',
+          '@context': 'https://raw.githubusercontent.com/ReproNim/reproschema/1.0.0/contexts/reproschema',
           '@type': 'reproschema:Response',
           '@id': `uuid:${responseUuid}`,
           wasAttributedTo: {
@@ -356,13 +349,13 @@
             else if (!val && string.includes('includes')) { // if val is undefined and is supposed to be a list
               val = `[]`;
             }
-            output = output.replace(new RegExp(`\\b${k}\\b`), val);
+            output = output.replaceAll(new RegExp(`\\b${k}\\b`, 'g'), val);
           } else {
-            output = output.replace(new RegExp(`\\b${k}\\b`), 0);
+            output = output.replaceAll(new RegExp(`\\b${k}\\b`, 'g'), 0);
           }
         });
         // console.log(356, output);
-        return safeEval(output);
+        return Function('return ' + output)();
       },
       responseMapper(responses) {
         // const keys = _.map(this.order(), c => c['@id']); // Object.keys(this.responses);
@@ -378,6 +371,12 @@
           });
 
         }
+        const respMapper = {};
+        _.map(keyArr, (a) => {
+          respMapper[a.qId] = { val: a.val, ref: a.key };
+        });
+        // Store the response variables in the state
+        this.$store.state.responseMap[this.activity['@id']] = respMapper;
         if (this.$store.getters.getQueryParameters) {
           const q = this.$store.getters.getQueryParameters;
           Object.entries(q).forEach(
@@ -450,11 +449,9 @@
         const currentIndex = parseInt(this.$store.state.activityIndex);
         const visibleAct = _.map(this.actVisibility, (ac, key) => (ac === true ? key : '')).filter(String);
         const nextIndex = visibleAct[visibleAct.indexOf(currentIndex) + 1];
-        if (this.$route.query.url) {
-          this.$router.push(`/activities/${nextIndex}?url=${this.$route.query.url}`);
-        } else {
-          this.$router.push(`/activities/${nextIndex}`);
-        }
+        this.$router.push({
+          'path': `/activities/${nextIndex}`,
+          'query': this.$route.query});
       },
       uploadZipData() {
         const Response = this.$store.state.exportResponses;
@@ -466,11 +463,12 @@
       },
       formatData(data) {
         const currentIndex = parseInt(this.$store.state.activityIndex);
-        console.log(464, 'data response: ', data.response[currentIndex]);
+        // console.log(464, 'data response: ', data.response[currentIndex]);
         const TOKEN = this.$store.getters.getAuthToken;
         const expiryMinutes = this.$store.state.expiryMinutes;
         const jszip = new JSZip();
         const fileName = `${uuidv4()}-${this.participantId}-activity${currentIndex}`;
+        const activityData = [];
         _.map(data.response[currentIndex], (itemObj) => {
           const newObj = { ...itemObj };
           if (itemObj['@type'] === 'reproschema:Response') {
@@ -481,10 +479,11 @@
               newObj.value = `${keyStrings[keyStrings.length-1]}-${rId}.wav`;
             }
           }
+          activityData.push(newObj);
         });
         // write out the activity files
         jszip.folder(fileName).file(`activity_${currentIndex}.jsonld`,
-                JSON.stringify(data.response[currentIndex], null, 4));
+                JSON.stringify(activityData, null, 4));
         jszip.generateAsync({ type: 'blob' })
           .then((myzipfile) => {
             // console.log(492, 'generate async ');
@@ -501,11 +500,16 @@
           });
       },
       async sendRetry(url, formData, retries = 3, backoff = 10000) {
+        if (!this.shouldUpload) {
+          console.log("Not uploading")
+          return;
+        }
         const config1 = {
           'Content-Type': 'multipart/form-data'
         };
         try {
-          const res = await axios.post(`${config.backendServer}/submit`, formData, config1);
+          // eslint-disable-next-line no-unused-vars
+          const res = await axios.post(url, formData, config1);
           // console.log(530, 'SUCCESS!!', formData, res.status);
         } catch (e) {
           if (retries > 0) {
@@ -595,6 +599,9 @@
           // console.log(495, criteria1, criteria2);
           return criteria1 && criteria2;
         });
+      },
+      shouldUpload() {
+        return !!(config.backendServer && this.$store.getters.getAuthToken);
       },
       context() {
         /* eslint-disable */

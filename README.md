@@ -152,33 +152,19 @@ need to [fork this repository](https://help.github.com/en/github/getting-started
 and [clone it](https://help.github.com/en/github/creating-cloning-and-archiving-repositories/cloning-a-repository)
 on your machine.
 
-To then run the app locally, you will have to install javascript `node.js`. A
-good way to do this, is to install [node version manager](https://github.com/nvm-sh/nvm)
-(NVM) to help you deal with different version of `node.js`.
+If you don't have node or are not familiar with it, the easiest option is to 
+use a Docker setup.
 
-If you are running linux, you can install NVM by typing:
-
-```
-curl -o- https://raw.githubusercontent.com/creationix/nvm/v0.33.11/install.sh | bash
+```shell
+docker run -it --rm -p 8080:8080 -v $(pwd):/src --entrypoint bash \
+    --platform linux/amd64 node:23.1.0-bookworm-slim
 ```
 
-Then close your terminal and reopen it then run the following to install the
-version 9 of `node.js`
+In the container terminal
 
-```
-nvm install node
-nvm install 9
-```
-
-You should then be able to use node to the following:
-
-### Install the dependencies
-``` bash
+```shell
+cd /src
 npm install
-```
-
-### Serve the app locally
-``` bash
 npm run serve
 ```
 
@@ -215,4 +201,51 @@ npm test
 ``` bash
 npm run lint
 ```
+
+## To test protocols and schemas locally
+
+Run this cors server script in the root directory of your reproschema. For
+example, if you clone the demo-protocol, run the script inside the cloned 
+directory. This script will serve the tree locally.
+
+```python
+#!/usr/bin/env python3
+
+# It's python3 -m http.server PORT for a CORS world
+
+from http.server import HTTPServer, SimpleHTTPRequestHandler
+import sys
+
+class CORSRequestHandler(SimpleHTTPRequestHandler):
+
+    def end_headers(self):
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate')
+        return super(CORSRequestHandler, self).end_headers()
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        self.end_headers()
+
+host = sys.argv[1] if len(sys.argv) > 2 else '0.0.0.0'
+port = int(sys.argv[len(sys.argv)-1]) if len(sys.argv) > 1 else 8000
+
+print("Listening on {}:{}".format(host, port))
+httpd = HTTPServer((host, port), CORSRequestHandler)
+httpd.serve_forever()
+```
+
+Change config.js in this ui repo to point to your local schema. For example,
+if you cloned the demo protocol it would look like this:
+
+```
+  githubSrc: 'http://localhost:8000/DemoProtocol/DemoProtocol_schema',
+```
+
+
 

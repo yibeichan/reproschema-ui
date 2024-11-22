@@ -24,7 +24,8 @@
             v-on:setData="setResponse"
             :responses="responses"
             :selected_language="selected_language"
-            :showPassOptions="showPassOptions"
+            :showPassOptions="findPassOptions"
+            :individualPassList="individualPassList"
             :reprotermsUrl="reprotermsUrl"
           />
         </transition>
@@ -47,8 +48,8 @@
 
 
     <div class="text-right mt-3" v-if="showPassOptions !== null ">
-      <b-button variant="default"
-                @click="restart">Restart</b-button>
+      <!--<b-button variant="default"
+                @click="restart">Restart</b-button> -->
       <b-button variant="default" v-if="showPassOptions['dontKnow']"
                 @click="dontKnow">Don't Know</b-button>
       <b-button variant="default" v-if="showPassOptions['skip']"
@@ -67,8 +68,6 @@ import Loader from '../Loader/';
 import { v4 as uuidv4 } from 'uuid';
 
 Vue.use(VuejsDialog);
-
-const safeEval = require('safe-eval');
 
 export default {
   name: 'Section',
@@ -101,7 +100,8 @@ export default {
       visibility: {},
       scores: {},
       currentIndex: 0,
-      showModal: false
+      showModal: false,
+      individualPassList: [],
     };
   },
   components: {
@@ -119,18 +119,51 @@ export default {
       // this.$store.dispatch('getActivityData');
       jsonld.expand(this.srcUrl).then((resp) => {
         this.activity = resp[0];
+        this.findIndividualPassOptions();
         this.listShow = [0];
         this.$nextTick(() => {
           const answered = _.filter(this.context, c =>
             Object.keys(this.responses).indexOf(c['@id']) > -1);
           if (!answered.length) {
-            this.listShow = [0];
+            this.listShow = [this.initializeListShow()];
           } else {
             this.listShow = _.map(new Array(answered.length + 1), (c, i) => i);
           }
           this.visibility = this.getVisibility(this.responses);
         });
       });
+    },
+    initializeListShow() {
+      const responseMapper = this.responseMapper(this.responses);
+      let i = 0;
+      for (i = 0; i < this.context.length; i += 1) {
+        const eachItem = (this.context)[i];
+        // return _.map(this.context, (o, index) => {
+        const matchedObject = _.filter(this.activity['http://schema.repronim.org/addProperties'], a => a['http://schema.repronim.org/isAbout'][0]['@id'] === eachItem['@id']);
+        let val = true; // true by default if not mentioned
+        if (matchedObject[0]['http://schema.repronim.org/isVis']) {
+          val = matchedObject[0]['http://schema.repronim.org/isVis'][0]['@value'];
+        }
+        if (_.isString(val)) {
+          val = this.evaluateString(val, responseMapper);
+        }
+        if (val === true) { // first visible item
+          break;
+        }
+      }
+      return i;
+      // });
+    },
+    findIndividualPassOptions() {
+      if (this.activity['http://schema.repronim.org/addProperties']) {
+        this.individualPassList = _.filter(this.activity['http://schema.repronim.org/addProperties'], ap => {
+          // eslint-disable-next-line no-prototype-builtins
+          if (ap.hasOwnProperty('http://schema.repronim.org/allow')) {
+            return ap;
+          }
+        });
+        // console.log(138, a);
+      }
     },
     getVisibility(responses) {
       const responseMapper = this.responseMapper(responses);
@@ -154,7 +187,7 @@ export default {
       return {};
     },
     responseMapper(responses) {
-      let keyArr;
+      let keyArr = [];
       // a variable map is defined! great
       if (this.activity['http://schema.repronim.org/addProperties']) {
         const vmap = this.activity['http://schema.repronim.org/addProperties'];
@@ -166,6 +199,33 @@ export default {
         });
 
       }
+      const respMapper = {};
+      _.map(keyArr, (a) => {
+        respMapper[a.qId] = { val: a.val, ref: a.key };
+      });
+      // Store the response variables in the state
+      this.$store.state.responseMap[this.activity['@id']] = respMapper;
+      // Create a mapping from uris to variable names
+      let uri2varmap = {};
+      Object.entries(this.$store.state.responseMap).forEach(
+            // eslint-disable-next-line no-unused-vars
+            ([unused, v]) => {
+              Object.entries(v).forEach(
+                  ([key1, value1]) => {
+                    uri2varmap[value1['ref']] = key1;
+                  })
+            });
+      Object.entries(this.$store.state.responseMap).forEach(
+            // eslint-disable-next-line no-unused-vars
+            ([key, v]) => {
+              Object.entries(v).forEach(
+                  ([key1, value1]) => {
+                    if (key in uri2varmap) {
+                      const joined_key = ''.concat(uri2varmap[key],'.',key1);
+                      keyArr.push({ qId: joined_key, val: value1['val'], key: value1['ref'] });
+                    }
+                  })
+            });
       if (this.$store.getters.getQueryParameters) {
         const q = this.$store.getters.getQueryParameters;
         Object.entries(q).forEach(
@@ -186,25 +246,36 @@ export default {
       return outMapper;
     },
     evaluateString(string, responseMapper) {
-      // console.log(176, string, responseMapper);
       const keys = Object.keys(responseMapper);
       let output = string;
+      let output_modified = false;
       _.map(keys, (k) => {
         // grab the value of the key from responseMapper
         let val = responseMapper[k].val;
-        if (Array.isArray(responseMapper[k].val)) {
-          val = responseMapper[k].val[0];
-        }
-        if (val !== 'http://schema.repronim.org/Skipped' && val !== 'http://schema.repronim.org/DontKnow') {
-          if (_.isString(val)) {
-            val = `'${val}'`; // put the string in quotes
+        if (val !== undefined) {
+          if (val !== 'skipped' && val !== 'dontknow') {
+            if (_.isString(val)) {
+              val = `'${val}'`; // put the string in quotes
+            }
+            if (_.isArray(val)) {
+              val = `[${val}]`; // put braces for array
+            }
+            let output_old = output;
+            output = output.replaceAll(new RegExp(`\\b${k}\\b` || `\\b${k}\\.`, 'g'), val);
+            if (output_old !== output) output_modified = true;
+          } else {
+            let output_old = output;
+            output = output.replaceAll(new RegExp(`\\b${k}\\b`, 'g'), 0);
+            if (output_old !== output) output_modified = true;
           }
-          output = output.replace(new RegExp(`\\b${k}\\b`), val);
-        } else {
-          output = output.replace(new RegExp(`\\b${k}\\b`), 0);
         }
       });
-      return safeEval(output);
+      if (output_modified) {
+        return Function("return " + output)();
+      }
+      else {
+        return false;
+      }
     },
     restart() {
       this.currentIndex = 0;
@@ -243,8 +314,9 @@ export default {
       }
       const respActivityUuid = uuidv4();
       const responseUuid = uuidv4();
+      // eslint-disable-next-line no-unused-vars
       const responseActivity = {
-        '@context': 'https://raw.githubusercontent.com/ReproNim/reproschema/1.0.0-rc2/contexts/generic',
+        '@context': 'https://raw.githubusercontent.com/ReproNim/reproschema/1.0.0/contexts/reproschema',
         '@type': 'reproschema:ResponseActivity',
         '@id': `uuid:${respActivityUuid}`,
         used: [`${itemUrl}`,
@@ -254,14 +326,14 @@ export default {
         startedAtTime: this.t0,
         endedAtTime: t1,
         wasAssociatedWith: {
-          version: '0.0.1',
+          version: '1.0.0',
           url: uiUrl,
           '@id': 'https://github.com/ReproNim/reproschema-ui',
         },
         generated: `uuid:${responseUuid}`,
       };
       const respData = {
-        '@context': 'https://raw.githubusercontent.com/ReproNim/reproschema/1.0.0-rc2/contexts/generic',
+        '@context': 'https://raw.githubusercontent.com/ReproNim/reproschema/1.0.0/contexts/reproschema',
         '@type': 'reproschema:Response',
         '@id': `uuid:${responseUuid}`,
         wasAttributedTo: {
@@ -337,6 +409,7 @@ export default {
       } if (!flag && this.activity['http://schema.repronim.org/overrideProperties']) { // priority 3
         // console.log(268, 'priority 3');
       } else { // priority 4 - look in activity addProperties
+        // eslint-disable-next-line no-unused-vars
         let addPA = _.filter(this.activity['http://schema.repronim.org/addProperties'], c =>
           //console.log(271, c['http://schema.repronim.org/isAbout'][0]['@id'], this.context[idx]['@id']);
           (c['http://schema.repronim.org/isAbout'][0]['@id'] === this.context[idx]['@id']) && c['http://schema.repronim.org/message']
@@ -353,9 +426,11 @@ export default {
       document.documentElement.scrollTop = 0; // For Chrome, Firefox, IE and Opera
       this.checkAlertMessage(idx);
       if (skip) {
+        this.$emit('saveResponse', this.context[idx]['@id'], 'http://schema.repronim.org/Skipped');
         this.setResponse('http://schema.repronim.org/Skipped', idx);
       }
       if (dontKnow) {
+        this.$emit('saveResponse', this.context[idx]['@id'], 'http://schema.repronim.org/DontKnow');
         this.setResponse('http://schema.repronim.org/DontKnow', idx);
       }
 

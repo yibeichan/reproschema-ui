@@ -7,7 +7,7 @@
       <div id="timer" class="timer" v-if="showTimer">
         <!--  Timer Component  -->
         <Timer
-            starttime="Dec 23, 2020 02:37:25"
+            starttime="Oct 31, 2024 21:00:00"
             :endtime=expiryTime
             trans='{
             "day":"Day",
@@ -127,7 +127,6 @@ import Vue from 'vue';
 import BootstrapVue from 'bootstrap-vue';
 import axios from 'axios';
 import Bowser from "bowser";
-import moment from 'moment';
 import _ from 'lodash';
 import JSZip from 'jszip';
 import { v4 as uuidv4 } from 'uuid';
@@ -143,7 +142,6 @@ import i18n from './i18n';
 
 Vue.use(BootstrapVue);
 Vue.filter('reverse', value => value.slice().reverse());
-const safeEval = require('safe-eval');
 const MediaStreamRecorder = require('msr');
 
 function getFilename(s) {
@@ -286,11 +284,9 @@ export default {
     },
     setActivity(index) {
       if (!this.checkDisableBack && this.isProtocolUrl) { // check if disableBack not enabled
-        if (this.$route.query.url) {
-          this.$router.push(`/activities/${index}?url=${this.$route.query.url}`);
-        } else {
-          this.$router.push(`/activities/${index}`);
-        }
+        this.$router.push({
+          'path': `/activities/${index}`,
+          'query': this.$route.query});
       }
     },
     updateProgress(progress) {
@@ -363,38 +359,60 @@ export default {
     evaluateString(string, responseMapper) {
       const keys = Object.keys(responseMapper);
       let output = string;
+      let output_modified = false;
       _.map(keys, (k) => {
         // grab the value of the key from responseMapper
         let val = responseMapper[k].val;
-        if (val !== 'skipped' && val !== 'dontknow') {
-          if (_.isString(val)) {
-            val = `'${val}'`; // put the string in quotes
+        if (val !== undefined) {
+          if (val !== 'skipped' && val !== 'dontknow') {
+            if (_.isString(val)) {
+              val = `'${val}'`; // put the string in quotes
+            }
+            if (_.isArray(val)) {
+              val = `[${val}]`; // put braces for array
+            }
+            let output_old = output;
+            output = output.replaceAll(new RegExp(`\\b${k}\\b` || `\\b${k}\\.`, 'g'), val);
+            if (output_old !== output) output_modified = true;
+          } else {
+            let output_old = output;
+            output = output.replaceAll(new RegExp(`\\b${k}\\b`, 'g'), 0);
+            if (output_old !== output) output_modified = true;
           }
-          if (_.isArray(val)) {
-            val = `[${val}]`; // put braces for array
-          }
-          output = output.replace(new RegExp(`\\b${k}\\b` || `\\b${k}\\.`), val);
-        } else {
-          output = output.replace(new RegExp(`\\b${k}\\b`), 0);
         }
       });
-      return safeEval(output);
+      if (output_modified) {
+        return Function("return " + output)();
+      }
+      else {
+        return false;
+      }
     },
-    responseMapper(index, responses) {
-      let keyArr;
+    responseMapper(index, responses, responseMap) {
+      let keyArr = [];
       // a variable map is defined! great
       if (this.schema['http://schema.repronim.org/addProperties']) {
         const vmap = this.schema['http://schema.repronim.org/addProperties'];
-        keyArr = _.map(vmap, (v) => {
-          const key = v['http://schema.repronim.org/isAbout'][0]['@id'];
-          const qId = v['http://schema.repronim.org/variableName'][0]['@value'];
-          const rp = _.filter(responses, r => key in r);
-          let val = rp[0];
-          if (rp[0]) {
-            val = rp[0][key];
-          }
-          return { key, val, qId };
-        });
+        Object.entries(vmap).forEach(
+            // eslint-disable-next-line no-unused-vars
+            ([unused, v]) => {
+              const key = v['http://schema.repronim.org/isAbout'][0]['@id'];
+              const qId = v['http://schema.repronim.org/variableName'][0]['@value'];
+              if (key in responseMap) {
+                Object.entries(responseMap[key]).forEach(
+                    ([key1, value1]) => {
+                      const joined_key = ''.concat(qId,'.',key1);
+                      keyArr.push({ qId: joined_key, val: value1['val'], key: value1['ref'] });
+                    });
+                }
+              const rp = _.filter(responses, r => key in r);
+              let val = rp[0];
+              if (rp[0]) {
+                val = rp[0][key];
+              }
+              keyArr.push({ key, val, qId });
+            }
+            );
         if (this.$store.getters.getQueryParameters) {
           const q = this.$store.getters.getQueryParameters;
           Object.entries(q).forEach(
@@ -433,6 +451,7 @@ export default {
       }
     },
     async computeVisibilityCondition(cond, index) {
+      // console.log('computeVisibilityCondition', cond, index);
       if (_.isObject(cond)) {
         const request = {
           method: cond.method,
@@ -458,9 +477,9 @@ export default {
         this.cache[cacheKey] = resp.data.qualified;
         return resp.data.qualified;
       } else if (_.isString(cond)) {
-        const responseMapper = this.responseMapper(index, this.$store.state.responses);
+        const responseMapper = this.responseMapper(index, this.$store.state.responses, this.$store.state.responseMap);
         const v = this.evaluateString(cond, responseMapper);
-        // this.visibilty[index] = v;
+        // this.visibility[index] = v;
         return v;
       }
       return cond;
@@ -630,10 +649,14 @@ export default {
         return path;
       },
       expiryTime() {
-        let endDate = moment(this.$store.getters.getExpiryTime)['_i'];
-        endDate = endDate.replace(' ', '+');
-        // console.log(537, endDate, new Date(endDate).toString(), new Date(endDate).getTime());
-        return new Date(endDate).getTime();
+        const timestamp = this.$store.getters.getExpiryTime;
+        const formattedTime = timestamp.replace(
+            /(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z/,
+            '$1-$2-$3T$4:$5:$6Z'
+        );
+        const time = Date.parse(formattedTime);
+        console.log(537, timestamp, formattedTime, time);
+        return time;
       },
       showTimer() {
           return !!this.$store.getters.getExpiryTime;
